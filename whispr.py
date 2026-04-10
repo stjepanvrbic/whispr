@@ -336,7 +336,7 @@ class Whispr:
                 if len(remaining) > 0:
                     text = self._transcribe(remaining)
                 else:
-                    text = prev  # already have the latest transcription
+                    text = " ".join(prev_words)
                 if text:
                     self.output.replace(text)
 

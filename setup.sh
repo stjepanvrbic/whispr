@@ -6,21 +6,16 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
 WHISPR_DIR="$HOME/.whispr"
 PACKAGES_DIR="$WHISPR_DIR/packages"
-MODELS_DIR="$WHISPR_DIR/models"
 PLIST_LABEL="com.whispr.daemon"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MODEL="base.en"
-MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${MODEL}.bin"
 
 info()  { echo -e "${GREEN}[whispr]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[whispr]${NC} $1"; }
 error() { echo -e "${RED}[whispr]${NC} $1" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
@@ -31,14 +26,14 @@ if [ "${1:-}" = "--uninstall" ]; then
     launchctl bootout "gui/$(id -u)/$PLIST_LABEL" 2>/dev/null || true
     rm -f "$PLIST_PATH"
     rm -rf "$WHISPR_DIR"
-    info "Done. whisper-cpp and portaudio were left installed."
+    info "Done."
     exit 0
 fi
 
 # ---------------------------------------------------------------------------
 # Pre-flight
 # ---------------------------------------------------------------------------
-[ "$(uname)" = "Darwin" ] || error "whispr requires macOS."
+[ "$(uname)" = "Darwin" ] || error "whispr requires macOS 14+ on Apple Silicon."
 
 # ---------------------------------------------------------------------------
 # Homebrew
@@ -56,7 +51,7 @@ fi
 # ---------------------------------------------------------------------------
 # System dependencies
 # ---------------------------------------------------------------------------
-for pkg in whisper-cpp portaudio python@3; do
+for pkg in python@3 portaudio; do
     if brew list "$pkg" &>/dev/null; then
         info "$pkg ✓"
     else
@@ -65,32 +60,31 @@ for pkg in whisper-cpp portaudio python@3; do
     fi
 done
 
-# ---------------------------------------------------------------------------
-# Python packages (no venv — avoids macOS TCC identity confusion)
-# ---------------------------------------------------------------------------
-info "Installing Python packages..."
 BREW_PREFIX="$(brew --prefix)"
 PYTHON3="$BREW_PREFIX/bin/python3"
-if [ ! -x "$PYTHON3" ]; then
-    PYTHON3="$(command -v python3)" || error "Python 3 not found."
-fi
+[ -x "$PYTHON3" ] || PYTHON3="$(command -v python3)" || error "Python 3 not found."
 
+# ---------------------------------------------------------------------------
+# Python packages (installed to ~/.whispr/packages, no venv needed)
+# ---------------------------------------------------------------------------
+info "Installing Python packages..."
 mkdir -p "$WHISPR_DIR"
 "$PYTHON3" -m pip install --quiet --target "$PACKAGES_DIR" -r "$SCRIPT_DIR/requirements.txt"
 info "Python packages ✓"
 
 # ---------------------------------------------------------------------------
-# Whisper model
+# Swift engine (FluidAudio / Parakeet CoreML)
 # ---------------------------------------------------------------------------
-mkdir -p "$MODELS_DIR"
-MODEL_FILE="$MODELS_DIR/ggml-${MODEL}.bin"
-if [ -f "$MODEL_FILE" ]; then
-    info "Model ggml-${MODEL}.bin ✓"
-else
-    info "Downloading ggml-${MODEL}.bin (~142 MB)..."
-    curl -L --progress-bar -o "$MODEL_FILE" "$MODEL_URL"
-    info "Model downloaded ✓"
+if ! command -v swift &>/dev/null; then
+    error "Swift is required. Install Xcode or Xcode Command Line Tools:\n  xcode-select --install"
 fi
+
+info "Building whispr-engine (this takes ~60s on first run)..."
+swift build -C "$SCRIPT_DIR/engine" -c release --product whispr-engine 2>&1 | tail -1
+ENGINE_BIN=$(swift build -C "$SCRIPT_DIR/engine" -c release --product whispr-engine --show-bin-path 2>/dev/null)/whispr-engine
+cp "$ENGINE_BIN" "$WHISPR_DIR/whispr-engine"
+chmod +x "$WHISPR_DIR/whispr-engine"
+info "whispr-engine ✓"
 
 # ---------------------------------------------------------------------------
 # Install whispr files
@@ -98,7 +92,7 @@ fi
 cp "$SCRIPT_DIR/whispr.py" "$WHISPR_DIR/whispr.py"
 if [ ! -f "$WHISPR_DIR/config.yaml" ]; then
     cp "$SCRIPT_DIR/config.yaml" "$WHISPR_DIR/config.yaml"
-    info "Default config written to $WHISPR_DIR/config.yaml"
+    info "Default config → $WHISPR_DIR/config.yaml"
 else
     info "Existing config preserved"
 fi
@@ -147,11 +141,10 @@ info "LaunchAgent installed and started ✓"
 echo ""
 info "whispr is installed and running!"
 echo ""
-echo "  On first launch, macOS will prompt you for:"
-echo "    1. Accessibility  →  toggle on in the System Settings window that opens"
-echo "    2. Microphone     →  click Allow when prompted"
+echo "  On first launch, macOS will prompt for Accessibility and Microphone."
+echo "  The speech model downloads automatically on first use (~1.5 GB)."
 echo ""
-echo "  Configuration:  $WHISPR_DIR/config.yaml"
-echo "  Logs:           /tmp/whispr.log"
-echo "  Restart:        launchctl kickstart -k gui/\$(id -u)/$PLIST_LABEL"
-echo "  Uninstall:      $SCRIPT_DIR/setup.sh --uninstall"
+echo "  Config:     $WHISPR_DIR/config.yaml"
+echo "  Logs:       /tmp/whispr.log"
+echo "  Restart:    launchctl kickstart -k gui/\$(id -u)/$PLIST_LABEL"
+echo "  Uninstall:  $SCRIPT_DIR/setup.sh --uninstall"
