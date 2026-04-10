@@ -1,0 +1,27 @@
+# whispr configuration
+# Edit this file at ~/.whispr/config.yaml after installation.
+# Restart the service after changes:
+#   launchctl kickstart -k gui/$(id -u)/com.whispr.daemon
+
+# Whisper model name — maps to ggml-{model}.bin in ~/.whispr/models/
+# Options: tiny.en, base.en, small.en, medium.en, large-v3-turbo
+model: base.en
+
+# Transcription language (ISO 639-1 code, or "auto")
+language: en
+
+# Port for the local whisper-server
+server_port: 8178
+
+# How transcribed text is inserted into the active app:
+#   keypress  — simulates key presses (doesn't touch clipboard)
+#   clipboard — copies text and pastes with Cmd+V (atomic, but overwrites clipboard)
+output_mode: keypress
+
+# Seconds of inactivity before the whisper model is unloaded from RAM.
+# Set to 0 to keep the model always loaded.
+idle_timeout: 600
+
+# Seconds between progressive transcription updates while recording.
+# Lower = more responsive but more CPU. Skipped if a request is still in-flight.
+stream_interval: 0.25
