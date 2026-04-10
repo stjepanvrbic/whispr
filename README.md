@@ -26,14 +26,14 @@ The setup script handles everything from scratch: Homebrew, whisper-cpp, Python 
 
 ### Permissions
 
-After installation, open **System Settings → Privacy & Security** and grant:
+On first launch, whispr automatically requests the permissions it needs:
 
-| Permission | What to add | Why |
-|---|---|---|
-| **Accessibility** | `~/.whispr/venv/bin/python3` | Global hotkey detection |
-| **Microphone** | Prompted automatically on first use | Audio capture |
+1. **Accessibility** — a system dialog opens System Settings; toggle whispr's Python binary **on**
+2. **Microphone** — click **Allow** when the standard macOS prompt appears
 
-> **Tip:** If nothing happens when you hold Option, check `/tmp/whispr.log` — it will tell you if Accessibility permission is missing.
+whispr waits patiently for both — no restart required after granting.
+
+> **Tip:** If something goes wrong, check `/tmp/whispr.log` for details.
 
 ## Configuration
 

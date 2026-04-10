@@ -77,7 +77,7 @@ if [ ! -x "$PYTHON3" ]; then
 fi
 
 mkdir -p "$WHISPR_DIR"
-"$PYTHON3" -m venv "$VENV_DIR"
+"$PYTHON3" -m venv --copies "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip
 "$VENV_DIR/bin/pip" install --quiet -r "$SCRIPT_DIR/requirements.txt"
 info "Python dependencies ✓"
@@ -148,9 +148,9 @@ info "LaunchAgent installed and started ✓"
 echo ""
 info "whispr is installed and running!"
 echo ""
-echo "  Grant these permissions in System Settings → Privacy & Security:"
-echo "    1. Accessibility  →  add  $VENV_DIR/bin/python3"
-echo "    2. Microphone     →  will be prompted on first use"
+echo "  On first launch, macOS will prompt you for:"
+echo "    1. Accessibility  →  toggle on in the System Settings window that opens"
+echo "    2. Microphone     →  click Allow when prompted"
 echo ""
 echo "  Configuration:  $WHISPR_DIR/config.yaml"
 echo "  Logs:           /tmp/whispr.log"

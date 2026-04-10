@@ -32,6 +32,60 @@ CONFIG_FILE = WHISPR_DIR / "config.yaml"
 
 
 # ---------------------------------------------------------------------------
+# Permission requests
+# ---------------------------------------------------------------------------
+
+def _ensure_permissions():
+    """Request Accessibility and Microphone permissions at startup."""
+    _ensure_accessibility()
+    _ensure_microphone()
+
+
+def _ensure_accessibility():
+    """Prompt for Accessibility permission and wait until granted."""
+    try:
+        from ApplicationServices import AXIsProcessTrusted, AXIsProcessTrustedWithOptions
+    except ImportError:
+        log.warning("Cannot auto-request Accessibility (pyobjc-framework-ApplicationServices missing)")
+        return
+
+    if AXIsProcessTrusted():
+        log.info("Accessibility ✓")
+        return
+
+    # Adds our binary to the Accessibility list and shows a one-time system dialog
+    AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True})
+    log.info("Waiting for Accessibility — please toggle on in System Settings")
+    while not AXIsProcessTrusted():
+        time.sleep(2)
+    log.info("Accessibility ✓")
+
+
+def _ensure_microphone():
+    """Trigger the standard macOS microphone permission dialog."""
+    try:
+        from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
+    except ImportError:
+        log.warning("Cannot auto-request Microphone (pyobjc-framework-AVFoundation missing)")
+        return
+
+    if AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio) == 3:
+        log.info("Microphone ✓")
+        return
+
+    log.info("Requesting microphone permission...")
+    done = threading.Event()
+    AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+        AVMediaTypeAudio, lambda granted: done.set()
+    )
+    done.wait(timeout=120)
+    if AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio) == 3:
+        log.info("Microphone ✓")
+    else:
+        log.warning("Microphone permission not granted — recording may fail")
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -388,6 +442,7 @@ def main():
     )
     config = Config.load()
     log.info("Config: %s", config)
+    _ensure_permissions()
     Whispr(config).run()
 
 
