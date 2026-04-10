@@ -2,22 +2,19 @@
 """whispr — Lightweight push-to-talk transcription for macOS.
 
 Hold Option to record, release to transcribe. Text streams as you speak.
-Uses whisper.cpp locally — your audio never leaves your machine.
+Press Escape to cancel any active transcription.
+Uses FluidAudio (Parakeet) locally — your audio never leaves your machine.
 """
 
-import io
 import json
 import logging
 import signal
-import socket
 import subprocess
 import sys
 import threading
 import time
-import wave
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.request import Request, urlopen
 
 import numpy as np
 import sounddevice as sd
@@ -27,8 +24,9 @@ import Quartz
 log = logging.getLogger("whispr")
 
 WHISPR_DIR = Path.home() / ".whispr"
-MODELS_DIR = WHISPR_DIR / "models"
 CONFIG_FILE = WHISPR_DIR / "config.yaml"
+ENGINE_BIN = WHISPR_DIR / "whispr-engine"
+SAMPLE_RATE = 16000
 
 
 # ---------------------------------------------------------------------------
@@ -36,24 +34,18 @@ CONFIG_FILE = WHISPR_DIR / "config.yaml"
 # ---------------------------------------------------------------------------
 
 def _ensure_permissions():
-    """Request Accessibility and Microphone permissions at startup."""
     _ensure_accessibility()
     _ensure_microphone()
 
 
 def _ensure_accessibility():
-    """Prompt for Accessibility permission and wait until granted."""
     try:
         from ApplicationServices import AXIsProcessTrusted, AXIsProcessTrustedWithOptions
     except ImportError:
-        log.warning("Cannot auto-request Accessibility (pyobjc-framework-ApplicationServices missing)")
         return
-
     if AXIsProcessTrusted():
         log.info("Accessibility ✓")
         return
-
-    # Adds our binary to the Accessibility list and shows a one-time system dialog
     AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": True})
     log.info("Waiting for Accessibility — please toggle on in System Settings")
     while not AXIsProcessTrusted():
@@ -62,17 +54,13 @@ def _ensure_accessibility():
 
 
 def _ensure_microphone():
-    """Trigger the standard macOS microphone permission dialog."""
     try:
         from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
     except ImportError:
-        log.warning("Cannot auto-request Microphone (pyobjc-framework-AVFoundation missing)")
         return
-
     if AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio) == 3:
         log.info("Microphone ✓")
         return
-
     log.info("Requesting microphone permission...")
     done = threading.Event()
     AVCaptureDevice.requestAccessForMediaType_completionHandler_(
@@ -82,7 +70,7 @@ def _ensure_microphone():
     if AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio) == 3:
         log.info("Microphone ✓")
     else:
-        log.warning("Microphone permission not granted — recording may fail")
+        log.warning("Microphone not granted — recording may fail")
 
 
 # ---------------------------------------------------------------------------
@@ -91,12 +79,9 @@ def _ensure_microphone():
 
 @dataclass
 class Config:
-    model: str = "base.en"
-    language: str = "en"
-    server_port: int = 8178
-    output_mode: str = "keypress"   # "keypress" or "clipboard"
-    idle_timeout: int = 600         # seconds; 0 = never unload model
-    stream_interval: float = 0.25   # seconds between progressive requests
+    output_mode: str = "keypress"
+    idle_timeout: int = 3600        # 1 hour; 0 = never unload
+    stream_interval: float = 0.01   # 10ms — just enough to yield, inference is the bottleneck
 
     @classmethod
     def load(cls) -> "Config":
@@ -107,59 +92,42 @@ class Config:
 
 
 # ---------------------------------------------------------------------------
-# Whisper server lifecycle
+# Transcription engine (FluidAudio via stdio)
 # ---------------------------------------------------------------------------
 
-class WhisperServer:
-    """Manages a whisper-server subprocess that keeps the model hot in RAM."""
+class Engine:
+    """Manages the whispr-engine process (FluidAudio / Parakeet CoreML).
+
+    Communicates via stdio: write a WAV file path to stdin, read a JSON
+    line from stdout.  The model stays hot in RAM between requests.
+    """
 
     def __init__(self, config: Config):
         self.config = config
         self.process: subprocess.Popen | None = None
         self._timer: threading.Timer | None = None
-
-    @property
-    def model_path(self) -> Path:
-        return MODELS_DIR / f"ggml-{self.config.model}.bin"
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.config.server_port}"
+        self._io_lock = threading.Lock()
 
     def ensure_running(self):
-        """Start the server if it isn't already up, and wait until ready."""
         self._cancel_timer()
         if self.process and self.process.poll() is None:
             return
-        log.info("Starting whisper-server on :%d", self.config.server_port)
+        log.info("Starting whispr-engine...")
         self.process = subprocess.Popen(
-            ["whisper-server",
-             "-m", str(self.model_path),
-             "--port", str(self.config.server_port),
-             "-l", self.config.language],
-            stdout=subprocess.DEVNULL,
+            [str(ENGINE_BIN)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
-        self._wait_ready()
-        log.info("whisper-server ready")
-
-    def _wait_ready(self, timeout=30):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                with socket.create_connection(
-                    ("127.0.0.1", self.config.server_port), timeout=1
-                ):
-                    return
-            except OSError:
-                time.sleep(0.1)
-        raise TimeoutError("whisper-server did not start within %ds" % timeout)
+        line = self.process.stdout.readline().decode().strip()
+        if line != "READY":
+            raise RuntimeError(f"Engine failed to start: {line}")
+        log.info("whispr-engine ready")
 
     def stop(self):
-        """Kill the server to free RAM."""
         self._cancel_timer()
         if self.process and self.process.poll() is None:
-            log.info("Stopping whisper-server")
+            log.info("Stopping whispr-engine")
             self.process.terminate()
             try:
                 self.process.wait(timeout=5)
@@ -168,7 +136,6 @@ class WhisperServer:
             self.process = None
 
     def reset_idle_timer(self):
-        """After this many idle seconds, stop the server to reclaim memory."""
         if self.config.idle_timeout <= 0:
             return
         self._cancel_timer()
@@ -181,26 +148,32 @@ class WhisperServer:
             self._timer.cancel()
             self._timer = None
 
-    def transcribe(self, audio: np.ndarray) -> str:
-        """POST audio to /inference and return the transcribed text."""
-        wav = _to_wav(audio)
-        boundary = b"----whispr"
-        body = (
-            b"--" + boundary + b"\r\n"
-            b'Content-Disposition: form-data; name="file"; filename="a.wav"\r\n'
-            b"Content-Type: audio/wav\r\n\r\n" + wav + b"\r\n"
-            b"--" + boundary + b"--\r\n"
-        )
-        req = Request(
-            f"{self.url}/inference",
-            data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary.decode()}"},
-        )
-        text = json.loads(urlopen(req, timeout=30).read()).get("text", "").strip()
-        # Filter whisper artifacts like [BLANK_AUDIO], [MUSIC], etc.
-        if text.startswith("[") and text.endswith("]"):
-            return ""
-        return text
+    def reset(self):
+        """Clear the engine's audio buffer (call at start of each recording)."""
+        with self._io_lock:
+            self.process.stdin.write((0).to_bytes(4, "little"))
+            self.process.stdin.flush()
+            self.process.stdout.readline()  # consume ack
+
+    def transcribe(self, new_audio: np.ndarray) -> str:
+        """Append new audio to engine buffer, transcribe the full buffer.
+
+        Only send audio captured SINCE the last call — the engine
+        accumulates internally, so we never re-send old samples.
+        """
+        samples = new_audio.astype(np.float32)
+        with self._io_lock:
+            self.process.stdin.write(len(samples).to_bytes(4, "little"))
+            self.process.stdin.write(samples.tobytes())
+            self.process.stdin.flush()
+            line = self.process.stdout.readline().decode().strip()
+        if not line:
+            raise RuntimeError("Engine returned empty response")
+        result = json.loads(line)
+        text = result.get("text", "").strip()
+        ms = result.get("ms", 0)
+        log.info("%dms: %s", ms, text)
+        return " ".join(text.split())
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +181,6 @@ class WhisperServer:
 # ---------------------------------------------------------------------------
 
 class Recorder:
-    """Captures microphone audio at 16 kHz mono into a growing buffer."""
-
     def __init__(self):
         self._chunks: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
@@ -218,7 +189,7 @@ class Recorder:
     def start(self):
         self._chunks = []
         self._stream = sd.InputStream(
-            samplerate=16000, channels=1, dtype="float32",
+            samplerate=SAMPLE_RATE, channels=1, dtype="float32",
             callback=self._on_audio,
         )
         self._stream.start()
@@ -231,7 +202,6 @@ class Recorder:
         return self.snapshot()
 
     def snapshot(self) -> np.ndarray:
-        """Return a copy of all audio captured so far."""
         with self._lock:
             if self._chunks:
                 return np.concatenate(self._chunks)
@@ -247,52 +217,32 @@ class Recorder:
 # ---------------------------------------------------------------------------
 
 class TextOutput:
-    """Types or pastes transcription text into the active application."""
-
     def __init__(self, mode: str):
         self.mode = mode
-        self._prev = ""
+        self._len = 0
 
-    def update(self, text: str, final: bool = False):
-        """Output transcription text, diffing against what's already on screen.
-
-        During streaming (final=False): only append — never delete text, to
-        avoid flicker when whisper revises earlier words.  If whisper changed
-        its mind about earlier text, skip this update entirely and wait.
-
-        On key release (final=True): apply full diff with backspaces so the
-        final output is accurate.
-        """
+    def append(self, text: str):
         if not text:
             return
+        self._emit(text)
+        self._len += len(text)
 
-        if final:
-            # Full diff: backspace divergent suffix, type corrected text
-            common = 0
-            for a, b in zip(self._prev, text):
-                if a != b:
-                    break
-                common += 1
-            to_delete = len(self._prev) - common
-            suffix = text[common:]
-            if to_delete:
-                _backspace(to_delete)
-            if suffix:
-                self._output(suffix)
-            self._prev = text
-        else:
-            # Streaming: only append if new text extends what we already typed
-            if text.startswith(self._prev):
-                suffix = text[len(self._prev):]
-                if suffix:
-                    self._output(suffix)
-                self._prev = text
-            # else: whisper revised earlier words — skip, final pass will fix it
+    def replace(self, text: str):
+        if self._len > 0:
+            _backspace(self._len)
+        self._emit(text)
+        self._len = len(text)
+
+    def cancel(self):
+        """Delete everything typed in this session."""
+        if self._len > 0:
+            _backspace(self._len)
+            self._len = 0
 
     def clear(self):
-        self._prev = ""
+        self._len = 0
 
-    def _output(self, text: str):
+    def _emit(self, text: str):
         _paste(text) if self.mode == "clipboard" else _type(text)
 
 
@@ -301,18 +251,15 @@ class TextOutput:
 # ---------------------------------------------------------------------------
 
 class Whispr:
-    """Glues key events, recording, transcription, and text output together."""
-
     def __init__(self, config: Config):
         self.config = config
-        self.server = WhisperServer(config)
+        self.engine = Engine(config)
         self.recorder = Recorder()
         self.output = TextOutput(config.output_mode)
         self._active = False
+        self._cancel = threading.Event()
         self._stop = threading.Event()
-        self._lock = threading.Lock()  # serialises recording sessions
-
-    # -- Key event handlers (called on main thread, must not block) --
+        self._lock = threading.Lock()
 
     def on_key_down(self):
         if self._active:
@@ -321,6 +268,7 @@ class Whispr:
         self.output.clear()
         self.recorder.start()
         self._stop.clear()
+        self._cancel.clear()
         threading.Thread(target=self._session, daemon=True).start()
 
     def on_key_up(self):
@@ -328,60 +276,117 @@ class Whispr:
             return
         self._stop.set()
 
-    # -- Recording session (runs in worker thread) --
+    def on_escape(self):
+        """Cancel the current transcription and delete streamed text."""
+        if not self._active:
+            return
+        log.info("Escape — cancelling")
+        self._cancel.set()
+        self._stop.set()
 
     def _session(self):
         with self._lock:
             try:
-                self.server.ensure_running()
+                self.engine.ensure_running()
             except Exception:
-                log.exception("Server startup failed")
+                log.exception("Engine startup failed")
                 self.recorder.stop()
                 self._active = False
                 return
 
-            # Progressive streaming: send growing audio buffer every interval
-            while not self._stop.wait(self.config.stream_interval):
-                self._try_transcribe(self.recorder.snapshot(), final=False)
+            self.engine.reset()
+            prev_words: list[str] = []
+            typed_words = 0
+            sent = 0
 
-            # Final pass with complete audio — applies corrections
+            while not self._stop.wait(self.config.stream_interval):
+                if self._cancel.is_set():
+                    break
+                audio = self.recorder.snapshot()
+                if len(audio) < SAMPLE_RATE or len(audio) == sent:
+                    continue
+                text = self._transcribe(audio[sent:])
+                sent = len(audio)
+                if not text:
+                    prev_words = []
+                    continue
+                words = text.split()
+                # Two-pass confirmation at WORD level, ignoring punctuation.
+                # This prevents comma/case flip-flops from stalling streaming.
+                stable = 0
+                for a, b in zip(prev_words, words):
+                    if _bare(a) != _bare(b):
+                        break
+                    stable += 1
+                if stable > typed_words:
+                    new = " ".join(words[typed_words:stable])
+                    if typed_words > 0:
+                        new = " " + new
+                    self.output.append(new)
+                    typed_words = stable
+                prev_words = words
+
+            # Final pass: send any remaining audio, replace with clean result
             audio = self.recorder.stop()
-            self._try_transcribe(audio, final=True)
-            self.server.reset_idle_timer()
+            remaining = audio[sent:]
+
+            if self._cancel.is_set():
+                self.output.cancel()
+            else:
+                if len(remaining) > 0:
+                    text = self._transcribe(remaining)
+                else:
+                    text = prev  # already have the latest transcription
+                if text:
+                    self.output.replace(text)
+
+            self.engine.reset_idle_timer()
             self._active = False
 
-    def _try_transcribe(self, audio: np.ndarray, final: bool = False):
-        if len(audio) < 4000:  # < 0.25 s — too short
-            return
+    def _transcribe(self, audio: np.ndarray) -> str:
         try:
-            text = self.server.transcribe(audio)
-            self.output.update(text, final=final)
+            return self.engine.transcribe(audio)
         except Exception:
             log.debug("Transcription failed", exc_info=True)
-
-    # -- Run loop --
+            return ""
 
     def run(self):
         app = self
-        tap_port = [None]  # mutable closure for re-enabling disabled taps
+        tap_port = [None]
 
         def on_event(proxy, etype, event, refcon):
             if etype == Quartz.kCGEventTapDisabledByTimeout:
                 Quartz.CGEventTapEnable(tap_port[0], True)
                 return event
-            flags = Quartz.CGEventGetFlags(event)
-            option_held = bool(flags & Quartz.kCGEventFlagMaskAlternate)
-            if option_held and not app._active:
-                app.on_key_down()
-            elif not option_held and app._active:
-                app.on_key_up()
+
+            # Escape key (keycode 53) — cancel active transcription
+            if etype == Quartz.kCGEventKeyDown:
+                keycode = Quartz.CGEventGetIntegerValueField(
+                    event, Quartz.kCGKeyboardEventKeycode
+                )
+                if keycode == 53 and app._active:
+                    app.on_escape()
+                    return event
+
+            # Option key — push to talk
+            if etype == Quartz.kCGEventFlagsChanged:
+                flags = Quartz.CGEventGetFlags(event)
+                option_held = bool(flags & Quartz.kCGEventFlagMaskAlternate)
+                if option_held and not app._active:
+                    app.on_key_down()
+                elif not option_held and app._active:
+                    app.on_key_up()
+
             return event
 
-        mask = Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
+        mask = (
+            Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
+            | Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
+        )
         tap = Quartz.CGEventTapCreate(
             Quartz.kCGSessionEventTap,
             Quartz.kCGHeadInsertEventTap,
-            0,  # kCGEventTapOptionDefault — return event unchanged
+            0,
             mask,
             on_event,
             None,
@@ -389,8 +394,7 @@ class Whispr:
         if tap is None:
             log.error(
                 "Cannot create event tap. "
-                "Grant Accessibility permission in System Settings → "
-                "Privacy & Security → Accessibility."
+                "Grant Accessibility permission in System Settings."
             )
             sys.exit(1)
         tap_port[0] = tap
@@ -401,13 +405,13 @@ class Whispr:
 
         def shutdown(*_):
             log.info("Shutting down")
-            app.server.stop()
+            app.engine.stop()
             Quartz.CFRunLoopStop(loop)
 
         signal.signal(signal.SIGTERM, shutdown)
         signal.signal(signal.SIGINT, shutdown)
 
-        log.info("whispr ready — hold Option to record")
+        log.info("whispr ready — hold Option to record, Escape to cancel")
         Quartz.CFRunLoopRun()
 
 
@@ -415,19 +419,13 @@ class Whispr:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _to_wav(audio: np.ndarray) -> bytes:
-    """Convert float32 samples at 16 kHz to 16-bit PCM WAV bytes."""
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(16000)
-        w.writeframes((audio * 32767).astype(np.int16).tobytes())
-    return buf.getvalue()
+
+def _bare(word: str) -> str:
+    """Strip punctuation and lowercase for fuzzy word comparison."""
+    return word.strip(".,!?;:'-\"").lower()
 
 
 def _backspace(n: int):
-    """Simulate n backspace key presses."""
     for _ in range(n):
         for pressed in (True, False):
             ev = Quartz.CGEventCreateKeyboardEvent(None, 51, pressed)
@@ -435,7 +433,6 @@ def _backspace(n: int):
 
 
 def _type(text: str):
-    """Simulate typing by posting keyboard events with unicode strings."""
     for ch in text:
         for pressed in (True, False):
             ev = Quartz.CGEventCreateKeyboardEvent(None, 0, pressed)
@@ -444,17 +441,12 @@ def _type(text: str):
 
 
 def _paste(text: str):
-    """Copy text to clipboard and simulate Cmd+V."""
     subprocess.run(["pbcopy"], input=text.encode(), check=True)
     for pressed in (True, False):
-        ev = Quartz.CGEventCreateKeyboardEvent(None, 9, pressed)  # 9 = V
+        ev = Quartz.CGEventCreateKeyboardEvent(None, 9, pressed)
         Quartz.CGEventSetFlags(ev, Quartz.kCGEventFlagMaskCommand)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 
 def main():
     logging.basicConfig(

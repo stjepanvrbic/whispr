@@ -23,5 +23,5 @@ output_mode: keypress
 idle_timeout: 600
 
 # Seconds between progressive transcription updates while recording.
-# Lower = more responsive but more CPU. Skipped if a request is still in-flight.
-stream_interval: 0.25
+# Lower = more responsive but more CPU.
+stream_interval: 0.1
