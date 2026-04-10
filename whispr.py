@@ -253,26 +253,47 @@ class TextOutput:
         self.mode = mode
         self._prev = ""
 
-    def update(self, text: str):
-        """Diff against previous output and type/paste only what changed."""
+    def update(self, text: str, final: bool = False):
+        """Output transcription text, diffing against what's already on screen.
+
+        During streaming (final=False): only append — never delete text, to
+        avoid flicker when whisper revises earlier words.  If whisper changed
+        its mind about earlier text, skip this update entirely and wait.
+
+        On key release (final=True): apply full diff with backspaces so the
+        final output is accurate.
+        """
         if not text:
             return
-        # Find the longest common prefix
-        common = 0
-        for a, b in zip(self._prev, text):
-            if a != b:
-                break
-            common += 1
-        to_delete = len(self._prev) - common
-        suffix = text[common:]
-        if to_delete:
-            _backspace(to_delete)
-        if suffix:
-            _paste(suffix) if self.mode == "clipboard" else _type(suffix)
-        self._prev = text
+
+        if final:
+            # Full diff: backspace divergent suffix, type corrected text
+            common = 0
+            for a, b in zip(self._prev, text):
+                if a != b:
+                    break
+                common += 1
+            to_delete = len(self._prev) - common
+            suffix = text[common:]
+            if to_delete:
+                _backspace(to_delete)
+            if suffix:
+                self._output(suffix)
+            self._prev = text
+        else:
+            # Streaming: only append if new text extends what we already typed
+            if text.startswith(self._prev):
+                suffix = text[len(self._prev):]
+                if suffix:
+                    self._output(suffix)
+                self._prev = text
+            # else: whisper revised earlier words — skip, final pass will fix it
 
     def clear(self):
         self._prev = ""
+
+    def _output(self, text: str):
+        _paste(text) if self.mode == "clipboard" else _type(text)
 
 
 # ---------------------------------------------------------------------------
@@ -321,20 +342,20 @@ class Whispr:
 
             # Progressive streaming: send growing audio buffer every interval
             while not self._stop.wait(self.config.stream_interval):
-                self._try_transcribe(self.recorder.snapshot())
+                self._try_transcribe(self.recorder.snapshot(), final=False)
 
-            # Final pass with complete audio
+            # Final pass with complete audio — applies corrections
             audio = self.recorder.stop()
-            self._try_transcribe(audio)
+            self._try_transcribe(audio, final=True)
             self.server.reset_idle_timer()
             self._active = False
 
-    def _try_transcribe(self, audio: np.ndarray):
+    def _try_transcribe(self, audio: np.ndarray, final: bool = False):
         if len(audio) < 4000:  # < 0.25 s — too short
             return
         try:
             text = self.server.transcribe(audio)
-            self.output.update(text)
+            self.output.update(text, final=final)
         except Exception:
             log.debug("Transcription failed", exc_info=True)
 

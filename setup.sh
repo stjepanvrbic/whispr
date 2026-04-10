@@ -11,7 +11,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 WHISPR_DIR="$HOME/.whispr"
-VENV_DIR="$WHISPR_DIR/venv"
+PACKAGES_DIR="$WHISPR_DIR/packages"
 MODELS_DIR="$WHISPR_DIR/models"
 PLIST_LABEL="com.whispr.daemon"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
@@ -46,7 +46,6 @@ fi
 if ! command -v brew &>/dev/null; then
     info "Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    # Make brew available in this session
     if [ -x /opt/homebrew/bin/brew ]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
     elif [ -x /usr/local/bin/brew ]; then
@@ -67,9 +66,9 @@ for pkg in whisper-cpp portaudio python@3; do
 done
 
 # ---------------------------------------------------------------------------
-# Python virtual environment
+# Python packages (no venv — avoids macOS TCC identity confusion)
 # ---------------------------------------------------------------------------
-info "Setting up Python environment..."
+info "Installing Python packages..."
 BREW_PREFIX="$(brew --prefix)"
 PYTHON3="$BREW_PREFIX/bin/python3"
 if [ ! -x "$PYTHON3" ]; then
@@ -77,10 +76,8 @@ if [ ! -x "$PYTHON3" ]; then
 fi
 
 mkdir -p "$WHISPR_DIR"
-"$PYTHON3" -m venv --copies "$VENV_DIR"
-"$VENV_DIR/bin/pip" install --quiet --upgrade pip
-"$VENV_DIR/bin/pip" install --quiet -r "$SCRIPT_DIR/requirements.txt"
-info "Python dependencies ✓"
+"$PYTHON3" -m pip install --quiet --target "$PACKAGES_DIR" -r "$SCRIPT_DIR/requirements.txt"
+info "Python packages ✓"
 
 # ---------------------------------------------------------------------------
 # Whisper model
@@ -118,13 +115,15 @@ cat > "$PLIST_PATH" <<PLIST
     <string>${PLIST_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${VENV_DIR}/bin/python3</string>
+        <string>${PYTHON3}</string>
         <string>${WHISPR_DIR}/whispr.py</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>${BREW_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>PYTHONPATH</key>
+        <string>${PACKAGES_DIR}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
