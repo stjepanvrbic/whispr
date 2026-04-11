@@ -127,11 +127,13 @@ struct RealProcessRunner: ProcessRunner {
             proc.standardOutput = stdoutPipe
             proc.standardError = stderrPipe
 
-            let forwarder: @Sendable (FileHandle) -> Void = { handle in
-                let data = handle.availableData
+            let emit: @Sendable (Data) -> Void = { data in
                 guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
                 text.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
                     .forEach { onLine(String($0)) }
+            }
+            let forwarder: @Sendable (FileHandle) -> Void = { handle in
+                emit(handle.availableData)
             }
             stdoutPipe.fileHandleForReading.readabilityHandler = forwarder
             stderrPipe.fileHandleForReading.readabilityHandler = forwarder
@@ -139,6 +141,10 @@ struct RealProcessRunner: ProcessRunner {
             proc.terminationHandler = { p in
                 stdoutPipe.fileHandleForReading.readabilityHandler = nil
                 stderrPipe.fileHandleForReading.readabilityHandler = nil
+                // Drain anything the readability handler missed between its
+                // last callback and the process exiting.
+                emit(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+                emit(stderrPipe.fileHandleForReading.readDataToEndOfFile())
                 cont.resume(returning: p.terminationStatus)
             }
 
