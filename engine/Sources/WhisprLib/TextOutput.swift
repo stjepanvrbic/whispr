@@ -9,12 +9,16 @@ import Foundation
 ///   • `.keypress`  — synthesise a unicode keyDown/keyUp per character
 ///   • `.clipboard` — put the text on NSPasteboard and post a synthetic Cmd+V
 ///
-/// `len` tracks the total grapheme-cluster count typed in the current
-/// session — it's the single source of truth for "how much of this
-/// monotonic partial have we already output" in `Whispr.onKeyDown`.
+/// `typed` is the full grapheme-cluster string already emitted in the
+/// current session — it's the single source of truth for "what is on
+/// screen right now" so that `sync(to:)` can compute which prefix needs
+/// rewinding when vocabulary substitution changes an earlier character.
+/// `len` is a convenience for the append-only fast path and equals
+/// `typed.count` at all times.
 public final class TextOutput: @unchecked Sendable {
     public private(set) var mode: OutputMode
-    public private(set) var len: Int = 0
+    public private(set) var typed: String = ""
+    public var len: Int { typed.count }
 
     public init(mode: OutputMode) {
         self.mode = mode
@@ -27,19 +31,45 @@ public final class TextOutput: @unchecked Sendable {
     public func append(_ text: String) {
         guard !text.isEmpty else { return }
         emit(text)
-        len += text.count
+        typed += text
     }
 
-    /// Backspace all typed characters and reset `len`.
+    /// Rewind any divergent suffix of `typed` and emit whatever part of
+    /// `desired` extends beyond the common prefix, so the on-screen text
+    /// ends up matching `desired`. When `desired` is a pure extension of
+    /// `typed` this degenerates to a plain append — the rewind branch is
+    /// only taken when vocabulary substitution changed a character that
+    /// was already typed.
+    public func sync(to desired: String) {
+        let tc = Array(typed)
+        let dc = Array(desired)
+        var common = 0
+        while common < tc.count, common < dc.count, tc[common] == dc[common] {
+            common += 1
+        }
+
+        if common < tc.count {
+            backspace(tc.count - common)
+            typed = String(tc.prefix(common))
+        }
+
+        if common < dc.count {
+            let addition = String(dc.suffix(dc.count - common))
+            emit(addition)
+            typed += addition
+        }
+    }
+
+    /// Backspace all typed characters and reset state.
     /// Called when a session is cancelled (Escape).
     public func cancel() {
-        if len > 0 { backspace(len) }
-        len = 0
+        if !typed.isEmpty { backspace(typed.count) }
+        typed = ""
     }
 
-    /// Reset `len` to zero without backspacing. Called at session start.
+    /// Reset state to zero without backspacing. Called at session start.
     public func clear() {
-        len = 0
+        typed = ""
     }
 
     // MARK: - Emission

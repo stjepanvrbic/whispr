@@ -92,6 +92,14 @@ public final class StatusBar: NSObject {
         prefs.target = self
         menu.addItem(prefs)
 
+        let reloadVocab = NSMenuItem(
+            title: "Reload vocabulary",
+            action: #selector(reloadVocabulary),
+            keyEquivalent: ""
+        )
+        reloadVocab.target = self
+        menu.addItem(reloadVocab)
+
         let update = NSMenuItem(
             title: "Update Whispr…",
             action: #selector(runUpdate),
@@ -126,6 +134,10 @@ public final class StatusBar: NSObject {
             prefsController = PreferencesWindow(whispr: whispr)
         }
         prefsController?.show()
+    }
+
+    @objc private func reloadVocabulary() {
+        whispr?.reloadVocabulary()
     }
 
     @objc private func runUpdate() {

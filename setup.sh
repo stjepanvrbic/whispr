@@ -186,6 +186,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Install vocabulary (seed list of terms whispr often gets wrong)
+# ---------------------------------------------------------------------------
+if [ ! -f "$WHISPR_DIR/vocabulary.txt" ]; then
+    cp "$SCRIPT_DIR/vocabulary.txt" "$WHISPR_DIR/vocabulary.txt"
+    info "Vocabulary → $WHISPR_DIR/vocabulary.txt"
+else
+    info "Existing vocabulary preserved"
+fi
+
+# ---------------------------------------------------------------------------
 # LaunchAgent — points to binary inside the .app bundle
 # ---------------------------------------------------------------------------
 cat > "$PLIST_PATH" <<PLIST

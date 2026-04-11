@@ -104,6 +104,21 @@ private struct PreferencesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section {
+                Toggle("Custom vocabulary", isOn: $draft.vocabularyEnabled)
+                Button("Open vocabulary file…") {
+                    openVocabularyFile()
+                }
+                Text("""
+                    Canonical word first, then misheard variants separated by \
+                    `|`, one entry per line. Lines starting with `#` are \
+                    comments. Click "Reload vocabulary" in the menu bar after \
+                    editing.
+                    """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .safeAreaInset(edge: .bottom) {
@@ -120,7 +135,33 @@ private struct PreferencesView: View {
             .padding()
             .background(.bar)
         }
-        .frame(width: 440, height: 420)
+        .frame(width: 440, height: 520)
+    }
+
+    /// Ensure `~/.whispr/vocabulary.txt` exists (creating an empty
+    /// commented skeleton if missing) and open it in the user's default
+    /// text editor.
+    private func openVocabularyFile() {
+        let url = Vocabulary.vocabularyFile
+        if !FileManager.default.fileExists(atPath: url.path) {
+            let header = """
+                # Whispr custom vocabulary
+                #
+                # Format: canonical|alias1|alias2|...
+                #   - Canonical form comes first; aliases after pipes.
+                #   - Matching is case-insensitive and word-boundary aware.
+                #   - Lines starting with # and blank lines are ignored.
+                #
+                # Click "Reload vocabulary" in the menu bar after editing.
+
+                """
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? header.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
     }
 }
 #endif

@@ -43,6 +43,9 @@ public final class Whispr: @unchecked Sendable {
     // Idle timeout
     private var idleTimer: DispatchSourceTimer?
 
+    // Custom vocabulary (nil when disabled or file missing/empty)
+    private var vocabulary: Vocabulary?
+
     // UI notification — called on main queue whenever the computed state
     // might have changed.
     public var onStateChange: ((SessionState) -> Void)?
@@ -72,6 +75,30 @@ public final class Whispr: @unchecked Sendable {
         keyboard.onKeyUp   = { [weak self] in self?.onKeyUp() }
         keyboard.onEscape  = { [weak self] in self?.onEscape() }
         keyboard.install()
+        loadVocabularyIfEnabled()
+    }
+
+    /// Load (or drop) the vocabulary from `~/.whispr/vocabulary.txt`
+    /// according to `config.vocabularyEnabled`. Safe to call repeatedly.
+    public func reloadVocabulary() {
+        loadVocabularyIfEnabled()
+    }
+
+    private func loadVocabularyIfEnabled() {
+        guard config.vocabularyEnabled else {
+            if vocabulary != nil {
+                log("Vocabulary disabled — unloading")
+            }
+            vocabulary = nil
+            return
+        }
+        if let vocab = Vocabulary.load() {
+            vocabulary = vocab
+            log("Vocabulary loaded: \(vocab.entries.count) entries from \(Vocabulary.vocabularyFile.path)")
+        } else {
+            vocabulary = nil
+            log("Vocabulary: no file at \(Vocabulary.vocabularyFile.path) — substitution disabled")
+        }
     }
 
     /// Called by AppDelegate at startup. Idempotent — safe to call repeatedly.
@@ -169,6 +196,9 @@ public final class Whispr: @unchecked Sendable {
             )
             warmupDone = false
         }
+        if new.vocabularyEnabled != old.vocabularyEnabled {
+            loadVocabularyIfEnabled()
+        }
         if new.enabled != old.enabled {
             setEnabled(new.enabled)
         }
@@ -207,10 +237,16 @@ public final class Whispr: @unchecked Sendable {
             await manager.setPartialTranscriptCallback { [weak self] transcript in
                 guard let self, !self.cancelled else { return }
                 // RNNT is monotonic — every new partial is a prefix-extension
-                // of the previous one. `textOutput.len` already records how
-                // much we've typed; type whatever hasn't been typed yet.
-                let newText = String(transcript.dropFirst(self.textOutput.len))
-                if !newText.isEmpty { self.textOutput.append(newText) }
+                // of the previous one. When vocabulary is disabled we can
+                // take the pure-append fast path; when enabled, vocabulary
+                // substitution may change characters that were already typed
+                // so we have to let `sync(to:)` rewind-and-retype.
+                if let vocab = self.vocabulary {
+                    self.textOutput.sync(to: vocab.correct(transcript))
+                } else {
+                    let newText = String(transcript.dropFirst(self.textOutput.len))
+                    if !newText.isEmpty { self.textOutput.append(newText) }
+                }
             }
             await manager.reset()
 
@@ -264,9 +300,16 @@ public final class Whispr: @unchecked Sendable {
                 let transcript = try await manager.finish()
                 log("SESSION: finish transcript=\"\(transcript)\"")
                 if !cancelled, !transcript.isEmpty {
-                    // Finish() only extends the last partial — append the diff.
-                    let remaining = String(transcript.dropFirst(textOutput.len))
-                    if !remaining.isEmpty { textOutput.append(remaining) }
+                    // Finish() only extends the last partial. When vocab is
+                    // active, apply corrections to the full transcript and
+                    // let `sync(to:)` handle any divergence with what we've
+                    // already typed.
+                    if let vocab = vocabulary {
+                        textOutput.sync(to: vocab.correct(transcript))
+                    } else {
+                        let remaining = String(transcript.dropFirst(textOutput.len))
+                        if !remaining.isEmpty { textOutput.append(remaining) }
+                    }
                 }
             } catch {
                 log("ERROR: Finish failed: \(error)")

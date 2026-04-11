@@ -60,6 +60,7 @@ Status: Ready | Recording… | Loading model… | Idle (model unloaded) | Disabl
 Enabled  ✓           ← click to toggle recording on/off
 ─────────
 Preferences…         ← opens a settings window
+Reload vocabulary    ← re-read ~/.whispr/vocabulary.txt after editing
 Update Whispr…       ← git pull + rebuild + restart
 ─────────
 Quit Whispr
@@ -77,10 +78,48 @@ Open **Preferences…** from the menu bar icon to change any of these live:
 | **Output** | Type keys | `Type keys` simulates each character; `Paste via clipboard` uses NSPasteboard + Cmd+V (faster for long transcripts). |
 | **Idle timeout** | 3600 s (1 hour) | Seconds of inactivity before Whispr unloads the model to free RAM. `0` = never unload. |
 | **Chunk size** | 560 ms | Nemotron streaming chunk: `560` (balanced) or `1120` (best accuracy). Applies on next model load. |
+| **Custom vocabulary** | On | Whether Whispr rewrites misrecognised words using `~/.whispr/vocabulary.txt`. See below. |
 
 Changes are applied immediately and saved to `~/.whispr/config.json` — no restart needed. You can also edit the JSON directly if you prefer.
 
 **About the idle timeout:** Whispr unloads the Nemotron model after 1 hour of inactivity to free RAM. The next press after that reloads the model in the background (~1 second on an M-series Mac) while your audio is captured in memory — you won't lose the first words.
+
+## Custom vocabulary
+
+Nemotron is trained on general-English speech and doesn't know your domain terms. If you say "Claude Code", you might get "clawed code". If you say "NVIDIA", you might get "in video". Whispr fixes this with a plain-text vocabulary file you own and edit.
+
+**Where it lives:** `~/.whispr/vocabulary.txt` (created from the seed list the first time you run `setup.sh`).
+
+**Format:** one entry per line, canonical form first, misrecognition aliases after pipes. `#` starts a comment, blank lines are ignored.
+
+```
+# Anthropic / Claude
+Claude|clawed|clode
+Claude Code|clawed code|cloud code
+Anthropic|and thropic|an thropic|antropic
+
+# NVIDIA / ML
+NVIDIA|in video|invidia|envida
+PyTorch|pie torch|pi torch
+Jupyter|jupiter
+```
+
+**How matching works:**
+- Case-insensitive, word-boundary aware — `clawed` matches `clawed` and `Clawed` and `CLAWED`, but not `clawedup`.
+- The canonical form's exact spelling (case included) is what gets typed.
+- Multi-word aliases work — `in video` rewrites to `NVIDIA`.
+- When you list both `get hub` → `GitHub` and `get` → `Git`, the longer alias wins, so "get hub" becomes "GitHub" rather than "Git Hub".
+- Matching is literal — there's no fuzzy / phonetic logic. You curate exactly what gets rewritten, which means zero surprising false positives.
+
+**Editing the file:**
+1. From the menu bar icon, click **Preferences…**.
+2. Click **Open vocabulary file…** — the file opens in your default text editor.
+3. Add or remove entries, save.
+4. Back in the menu bar icon, click **Reload vocabulary** — no restart needed.
+
+You can also edit the file directly at `~/.whispr/vocabulary.txt` and click Reload.
+
+**Toggling off:** uncheck **Custom vocabulary** in Preferences → Save. The file is left on disk; vocabulary substitution is just skipped on each partial and final transcript. Re-enable any time.
 
 ## Updating
 
@@ -152,7 +191,8 @@ engine/
 │       ├── AudioBuffer.swift       # AVAudioPCMBuffer ↔ AudioChunk helpers
 │       ├── AudioCapture.swift      # AVAudioEngine mic input
 │       ├── KeyboardMonitor.swift   # CGEventTap for the hotkey + Escape
-│       ├── TextOutput.swift        # keypress + clipboard output
+│       ├── TextOutput.swift        # keypress + clipboard output + sync rewind
+│       ├── Vocabulary.swift        # vocabulary.txt parser + alias rewriter
 │       ├── WhisprDaemon.swift      # Whispr class: session orchestration
 │       ├── WhisprApp.swift         # NSApplication entry + AppDelegate
 │       ├── StatusBar.swift         # menu bar NSStatusItem + menu

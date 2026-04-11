@@ -21,6 +21,7 @@ struct ConfigTests {
         #expect(c.outputMode == .keypress)
         #expect(c.idleTimeout == 3600)
         #expect(c.chunkSize == .ms560)
+        #expect(c.vocabularyEnabled == true)
     }
 
     // MARK: - Decoding
@@ -28,13 +29,14 @@ struct ConfigTests {
     @Test("Decode full JSON")
     func decodeFull() throws {
         let c = try decode("""
-            {"enabled":false,"hotkey":"command","output_mode":"clipboard","idle_timeout":0,"chunk_size":1120}
+            {"enabled":false,"hotkey":"command","output_mode":"clipboard","idle_timeout":0,"chunk_size":1120,"vocabulary_enabled":false}
             """)
         #expect(c.enabled == false)
         #expect(c.hotkey == .command)
         #expect(c.outputMode == .clipboard)
         #expect(c.idleTimeout == 0)
         #expect(c.chunkSize == .ms1120)
+        #expect(c.vocabularyEnabled == false)
     }
 
     @Test("Missing keys fall back to defaults")
@@ -45,15 +47,17 @@ struct ConfigTests {
         #expect(c.hotkey == .option)
         #expect(c.idleTimeout == 3600)
         #expect(c.chunkSize == .ms560)
+        #expect(c.vocabularyEnabled == true)
     }
 
     @Test("Invalid per-field values fall back to defaults (tolerant decoding)")
     func decodeInvalidPerField() throws {
         // An invalid chunk_size and a valid idle_timeout — idle_timeout
         // should survive because each field decodes independently.
-        let c = try decode(#"{"chunk_size":999,"idle_timeout":120}"#)
+        let c = try decode(#"{"chunk_size":999,"idle_timeout":120,"vocabulary_enabled":"sure"}"#)
         #expect(c.chunkSize == .ms560)           // fell back
         #expect(c.idleTimeout == 120)            // preserved
+        #expect(c.vocabularyEnabled == true)     // fell back (string, not bool)
     }
 
     @Test("Invalid hotkey and output_mode also tolerated")
@@ -110,7 +114,8 @@ struct ConfigTests {
             hotkey: .rightOption,
             outputMode: .clipboard,
             idleTimeout: 120,
-            chunkSize: .ms1120
+            chunkSize: .ms1120,
+            vocabularyEnabled: false
         )
         try original.save(to: tmp)
         #expect(Config.load(from: tmp) == original)
@@ -125,7 +130,8 @@ struct ConfigTests {
             hotkey: .rightOption,
             outputMode: .clipboard,
             idleTimeout: 99,
-            chunkSize: .ms1120
+            chunkSize: .ms1120,
+            vocabularyEnabled: false
         )
         let data = try JSONEncoder().encode(c)
         let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
@@ -134,8 +140,10 @@ struct ConfigTests {
         #expect(dict["output_mode"] as? String == "clipboard")
         #expect(dict["idle_timeout"] as? Int == 99)
         #expect(dict["chunk_size"] as? Int == 1120)
+        #expect(dict["vocabulary_enabled"] as? Bool == false)
         #expect(dict["outputMode"] == nil)
         #expect(dict["idleTimeout"] == nil)
+        #expect(dict["vocabularyEnabled"] == nil)
     }
 
     @Test("Config round-trips through JSONEncoder/JSONDecoder")
@@ -145,7 +153,8 @@ struct ConfigTests {
             hotkey: .fn,
             outputMode: .keypress,
             idleTimeout: 42,
-            chunkSize: .ms1120
+            chunkSize: .ms1120,
+            vocabularyEnabled: false
         )
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(Config.self, from: data)

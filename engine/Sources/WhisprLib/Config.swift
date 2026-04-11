@@ -38,38 +38,43 @@ public struct Config: Codable, Sendable, Equatable {
     public var outputMode: OutputMode   = .keypress
     public var idleTimeout: Int         = 3600       // seconds; 0 = never unload
     public var chunkSize: ChunkSize     = .ms560
+    public var vocabularyEnabled: Bool  = true
 
     public init(
         enabled: Bool = true,
         hotkey: HotkeyModifier = .option,
         outputMode: OutputMode = .keypress,
         idleTimeout: Int = 3600,
-        chunkSize: ChunkSize = .ms560
+        chunkSize: ChunkSize = .ms560,
+        vocabularyEnabled: Bool = true
     ) {
         self.enabled = enabled
         self.hotkey = hotkey
         self.outputMode = outputMode
         self.idleTimeout = idleTimeout
         self.chunkSize = chunkSize
+        self.vocabularyEnabled = vocabularyEnabled
     }
 
     enum CodingKeys: String, CodingKey {
         case enabled
         case hotkey
-        case outputMode  = "output_mode"
-        case idleTimeout = "idle_timeout"
-        case chunkSize   = "chunk_size"
+        case outputMode         = "output_mode"
+        case idleTimeout        = "idle_timeout"
+        case chunkSize          = "chunk_size"
+        case vocabularyEnabled  = "vocabulary_enabled"
     }
 
     // Per-field tolerant decoding: a malformed value for one field falls
     // back to that field's default instead of nuking the whole config.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.enabled     = (try? c.decodeIfPresent(Bool.self,           forKey: .enabled))     ?? true
-        self.hotkey      = (try? c.decodeIfPresent(HotkeyModifier.self, forKey: .hotkey))      ?? .option
-        self.outputMode  = (try? c.decodeIfPresent(OutputMode.self,     forKey: .outputMode))  ?? .keypress
-        self.idleTimeout = (try? c.decodeIfPresent(Int.self,            forKey: .idleTimeout)) ?? 3600
-        self.chunkSize   = (try? c.decodeIfPresent(ChunkSize.self,      forKey: .chunkSize))   ?? .ms560
+        self.enabled           = (try? c.decodeIfPresent(Bool.self,           forKey: .enabled))           ?? true
+        self.hotkey            = (try? c.decodeIfPresent(HotkeyModifier.self, forKey: .hotkey))            ?? .option
+        self.outputMode        = (try? c.decodeIfPresent(OutputMode.self,     forKey: .outputMode))        ?? .keypress
+        self.idleTimeout       = (try? c.decodeIfPresent(Int.self,            forKey: .idleTimeout))       ?? 3600
+        self.chunkSize         = (try? c.decodeIfPresent(ChunkSize.self,      forKey: .chunkSize))         ?? .ms560
+        self.vocabularyEnabled = (try? c.decodeIfPresent(Bool.self,           forKey: .vocabularyEnabled)) ?? true
     }
 
     // MARK: - Filesystem

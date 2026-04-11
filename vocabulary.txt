@@ -1,0 +1,100 @@
+# Whispr custom vocabulary
+#
+# Format: canonical|alias1|alias2|...
+#   - Canonical form comes first; aliases after pipes.
+#   - Matching is case-insensitive and word-boundary aware.
+#   - The canonical form's exact case is what gets typed.
+#   - Lines starting with # and blank lines are ignored.
+#
+# Edit this file, then click "Reload vocabulary" in the Whispr menu bar
+# icon to pick up changes without restarting the daemon.
+
+# --- Anthropic / Claude ---
+Claude|clawed|clode
+Claude Code|clawed code|cloud code|clode code
+Anthropic|and thropic|an thropic|antropic|anthropy
+
+# --- OpenAI / ChatGPT ---
+OpenAI|open a i|open eye
+ChatGPT|chat g p t|chatty p t|chat gbt
+GPT|g p t
+
+# --- GitHub / Git tooling ---
+GitHub|get hub|git hub
+Copilot|co pilot|copy lot|copilate
+Codespaces|code spaces
+
+# --- NVIDIA / ML hardware ---
+NVIDIA|in video|invidia|envidia|envida
+CUDA|cooda|kooda
+
+# --- Python ML stack ---
+PyTorch|pie torch|pi torch
+TensorFlow|tensor flow
+NumPy|numb pie|num pie
+SciPy|sigh pie|sci pie
+Jupyter|jupiter|jupyther
+scikit-learn|sigh kit learn|scikit learn
+
+# --- Web frameworks ---
+TypeScript|type script
+JavaScript|java script
+Next.js|next j s
+Svelte|svelt|svealte
+Tailwind|tail wind
+FastAPI|fast api|fast a p i
+GraphQL|graph q l|graph ql
+
+# --- Apple platform ---
+SwiftUI|swift u i|swift ui
+AppKit|app kit
+UIKit|u i kit|ui kit
+CoreML|core m l|core ml
+AVFoundation|a v foundation|av foundation
+Xcode|ex code|x code
+macOS|mac o s|mac os
+
+# --- DevOps / cloud ---
+Kubernetes|cuber netties|coober netties|kuber netties|kubernetties
+kubectl|cube c t l|kube c t l|cube cuttle|cube control
+Terraform|terra form
+Ansible|ansable|ansibel
+Grafana|graphana|graph fauna|grafauna
+Jaeger|yager|jager|yeager
+Prometheus|promethius
+Datadog|data dog
+
+# --- Databases ---
+PostgreSQL|postgres q l|postgres ql|post gres
+Redis|red is|red iss
+MongoDB|mongo d b|mongo db
+SQLite|sequel lite|s q lite
+DynamoDB|dynamo d b|dynamo db
+
+# --- Protocols / auth ---
+OAuth|oh auth|o auth|oh oth
+JWT|j w t|jay double u tee
+WebSocket|web socket
+
+# --- CLI / shell ---
+zsh|z s h|z shell
+tmux|t mux|tee mux|timux
+ripgrep|rip grep
+Neovim|neo vim|new vim
+Homebrew|home brew
+LaunchAgent|launch agent
+launchd|launch d
+
+# --- ASR / ML concepts (Whispr-specific) ---
+FluidAudio|fluid audio|fluent audio
+Whispr|whisper
+Nemotron|nemo tron|nemetron|nemitron
+Parakeet|paracket|parakite
+RNNT|r n n t
+CTC|c t c
+TDT|t d t
+ASR|a s r
+LLM|l l m
+
+# --- Names ---
+Stjepan|stefan|stephan|stefen|stepan|step on|stepawn
