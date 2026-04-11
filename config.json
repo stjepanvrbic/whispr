@@ -1,0 +1,5 @@
+{
+  "output_mode": "keypress",
+  "idle_timeout": 3600,
+  "chunk_size": 560
+}

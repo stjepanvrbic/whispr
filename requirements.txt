@@ -1,7 +1,0 @@
-numpy
-sounddevice
-pyobjc-framework-Quartz
-pyobjc-framework-Cocoa
-pyobjc-framework-ApplicationServices
-pyobjc-framework-AVFoundation
-pyyaml

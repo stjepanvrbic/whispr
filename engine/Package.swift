@@ -5,14 +5,25 @@ let package = Package(
     name: "WhisprEngine",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.0"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.13.0"),
     ],
     targets: [
-        .executableTarget(
-            name: "whispr-engine",
+        .target(
+            name: "WhisprLib",
             dependencies: [
                 .product(name: "FluidAudio", package: "FluidAudio"),
-            ]
+            ],
+            path: "Sources/WhisprLib"
+        ),
+        .executableTarget(
+            name: "whispr-engine",
+            dependencies: ["WhisprLib"],
+            path: "Sources/WhisprEngine"
+        ),
+        .testTarget(
+            name: "WhisprTests",
+            dependencies: ["WhisprLib"],
+            path: "Tests/WhisprTests"
         ),
     ]
 )
