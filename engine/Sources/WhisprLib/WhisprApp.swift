@@ -39,8 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let manager = StreamingNemotronAsrManager(
             requestedChunkSize: config.chunkSize.nemotron
         )
+        let audioCapture = AudioCapture()
 
-        whispr = Whispr(config: config, manager: manager)
+        whispr = Whispr(config: config, manager: manager, audioCapture: audioCapture)
         statusBar = StatusBar(whispr: whispr)
         whispr.onStateChange = { [weak statusBar] state in
             statusBar?.setState(state)
