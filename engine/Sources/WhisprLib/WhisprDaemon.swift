@@ -51,6 +51,9 @@ public final class Whispr: @unchecked Sendable {
     private var audioContinuation: AsyncStream<AudioChunk>.Continuation?
     private var processingTask: Task<Void, Never>?
     private var chunksReceived: Int = 0
+    private let outputCoordinator = TranscriptOutputCoordinator()
+    private var nextOutputSessionID: UInt64 = 0
+    private var currentOutputSessionID: UInt64?
 
     // Drain state — `drainTask` chains previous sessions' finish() work
     // so session N+1's `reset()` can't clobber session N's accumulated
@@ -78,6 +81,7 @@ public final class Whispr: @unchecked Sendable {
         config: Config,
         manager: any AsrSession,
         audioCapture: any AudioCaptureSource,
+        textOutput: TextOutput? = nil,
         graceCloseDelay: TimeInterval = 0.15,
         persistConfig: Bool = true
     ) {
@@ -86,7 +90,7 @@ public final class Whispr: @unchecked Sendable {
         self.audioCapture = audioCapture
         self.graceCloseDelay = graceCloseDelay
         self.persistConfig = persistConfig
-        self.textOutput = TextOutput(mode: config.outputMode)
+        self.textOutput = textOutput ?? TextOutput(mode: config.outputMode)
         self.keyboard = KeyboardMonitor(modifier: config.hotkey)
     }
 
@@ -209,6 +213,7 @@ public final class Whispr: @unchecked Sendable {
     /// cleanly; the manager cleanup is fire-and-forget because macOS
     /// will nuke the process either way.
     public func shutdown() {
+        textOutput.finishSession()
         audioCapture.stop()
         Task { [manager] in await manager.cleanup() }
     }
@@ -317,6 +322,10 @@ public final class Whispr: @unchecked Sendable {
         sessionStart = Date()
         chunksReceived = 0
         cancelIdleTimer()
+        nextOutputSessionID &+= 1
+        if nextOutputSessionID == 0 { nextOutputSessionID = 1 }
+        let outputSessionID = nextOutputSessionID
+        currentOutputSessionID = outputSessionID
 
         let (stream, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
         audioContinuation = continuation
@@ -325,7 +334,7 @@ public final class Whispr: @unchecked Sendable {
         // replace `self.drainTask` while we're mid-session.
         let previousDrain = drainTask
 
-        processingTask = Task { [self] in
+        processingTask = Task { [self, outputSessionID] in
             // Wait for model load if one is in flight.
             if let loadTask { await loadTask.value }
             // Wait for any previous session's drain to fully complete
@@ -341,21 +350,23 @@ public final class Whispr: @unchecked Sendable {
             // partial-callback fired during the old drain lands against
             // the old cursor, and our new session starts from a clean
             // slate.
-            await MainActor.run { [self] in self.textOutput.clear() }
+            await outputCoordinator.beginSession(
+                sessionID: outputSessionID,
+                textOutput: textOutput
+            )
 
             await manager.setPartialTranscriptCallback { [weak self] transcript in
-                // Dispatch the typing work off the ASR actor so its
-                // processChunk isn't blocked while we post CGEvents.
-                // DispatchQueue.main is FIFO, so monotonic partials stay
-                // in order.
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, !self.cancelled else { return }
-                    if let vocab = self.vocabulary {
-                        self.textOutput.sync(to: vocab.correct(transcript))
-                    } else {
-                        let newText = String(transcript.dropFirst(self.textOutput.len))
-                        if !newText.isEmpty { self.textOutput.append(newText) }
-                    }
+                // Keep typing work off the ASR actor, but coalesce to
+                // the latest desired transcript so long sessions don't
+                // build an unbounded main-queue backlog.
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.outputCoordinator.submitPartial(
+                        transcript,
+                        sessionID: outputSessionID,
+                        vocabulary: self.vocabulary,
+                        textOutput: self.textOutput
+                    )
                 }
             }
             await manager.reset()
@@ -422,6 +433,7 @@ public final class Whispr: @unchecked Sendable {
         let drained = processingTask
         let previousDrain = drainTask
         let wasCancelledAtRelease = cancelled
+        let outputSessionID = currentOutputSessionID
         // Capture the manager by value in case `applyConfigUpdate`
         // reassigns `self.manager` (on chunk-size change) while this
         // drain is still in flight — we need to finish the old manager,
@@ -443,13 +455,14 @@ public final class Whispr: @unchecked Sendable {
         audioContinuation = nil
         processingTask = nil
         sessionStart = nil
+        currentOutputSessionID = nil
 
         // UUID token lets the finished task check whether it's still
         // the "current" drain when it wakes up on main — a subsequent
         // session may have replaced `drainTask` with its own reference.
         let thisDrainId = UUID()
         drainTaskId = thisDrainId
-        drainTask = Task { [self] in
+        drainTask = Task { [self, outputSessionID] in
             // Serialise against any previous drain so finish() calls on
             // the manager strictly overlap: finish1 → reset2 → finish2.
             await previousDrain?.value
@@ -467,25 +480,25 @@ public final class Whispr: @unchecked Sendable {
             log("SESSION: drainMs=\(drainMs) chunks=\(sessionChunks)")
             log("SESSION: finish transcript=\"\(transcript)\"")
 
-            if !wasCancelledAtRelease, !transcript.isEmpty {
-                // Final transcript typing goes through the main queue,
-                // same serial FIFO as the partial callbacks, so it
-                // lands strictly after any still-pending partials.
-                // Copy transcript to an immutable local so the main
-                // closure captures a Sendable value without crossing
-                // the task's mutable-variable isolation boundary.
-                let finalTranscript = transcript
-                await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self else { cont.resume(); return }
-                        if let vocab = self.vocabulary {
-                            self.textOutput.sync(to: vocab.correct(finalTranscript))
+            let finalTranscript = transcript
+            if let outputSessionID {
+                await outputCoordinator.finishSession(
+                    finalTranscript: finalTranscript,
+                    cancelled: wasCancelledAtRelease,
+                    sessionID: outputSessionID,
+                    vocabulary: vocabulary,
+                    textOutput: textOutput
+                )
+            } else {
+                await MainActor.run { [self] in
+                    if !wasCancelledAtRelease, !finalTranscript.isEmpty {
+                        if let vocab = vocabulary {
+                            textOutput.sync(to: vocab.correct(finalTranscript))
                         } else {
-                            let remaining = String(finalTranscript.dropFirst(self.textOutput.len))
-                            if !remaining.isEmpty { self.textOutput.append(remaining) }
+                            textOutput.sync(to: finalTranscript)
                         }
-                        cont.resume()
                     }
+                    textOutput.finishSession()
                 }
             }
 
@@ -513,13 +526,26 @@ public final class Whispr: @unchecked Sendable {
         let drained = processingTask
         let previousDrain = drainTask
         let mgr = manager
+        let outputSessionID = currentOutputSessionID
 
         audioContinuation?.finish()
         audioContinuation = nil
         processingTask = nil
         active = false
         sessionStart = nil
-        textOutput.cancel()
+        currentOutputSessionID = nil
+
+        if let outputSessionID {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.outputCoordinator.cancelSession(
+                    sessionID: outputSessionID,
+                    textOutput: self.textOutput
+                )
+            }
+        } else {
+            textOutput.cancel()
+        }
 
         let thisDrainId = UUID()
         drainTaskId = thisDrainId

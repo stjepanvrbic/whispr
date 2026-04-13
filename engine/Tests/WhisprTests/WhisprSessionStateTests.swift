@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 @preconcurrency import AVFoundation
 import FluidAudio
 import Foundation
@@ -37,6 +38,7 @@ struct WhisprSessionStateTests {
             config: makeTestConfig(),
             manager: asr,
             audioCapture: capture,
+            textOutput: makeSilentTextOutput(mode: .keypress),
             graceCloseDelay: graceCloseDelay,
             persistConfig: false
         )
@@ -168,6 +170,57 @@ struct WhisprSessionStateTests {
 
         let second = asr.calls.filter { $0 == "reset" || $0 == "finish" }
         #expect(second == ["reset", "finish"])
+    }
+
+    @Test("Escape restores the original clipboard in clipboard mode")
+    @MainActor
+    func escapeRestoresClipboard() async throws {
+        let asr = MockAsrSession()
+        let capture = MockAudioCapture()
+        let whispr = Whispr(
+            config: Config(
+                enabled: true,
+                hotkey: .option,
+                outputMode: .clipboard,
+                idleTimeout: 0,
+                chunkSize: .ms560,
+                vocabularyEnabled: false
+            ),
+            manager: asr,
+            audioCapture: capture,
+            textOutput: makeSilentTextOutput(mode: .clipboard),
+            graceCloseDelay: 0.02,
+            persistConfig: false
+        )
+        whispr._testMarkModelsLoaded()
+        whispr.install()
+        asr.resetCallHistory()
+
+        await PasteboardTestSupport.withPreservedPasteboard { pasteboard in
+            pasteboard.clearContents()
+            pasteboard.setString("original clipboard", forType: .string)
+
+            whispr.onKeyDown()
+            capture.emit(makeTestBuffer())
+
+            let callbackReady = Date().addingTimeInterval(1.0)
+            while asr.partialCallback == nil, Date() < callbackReady {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+
+            guard let partialCallback = asr.partialCallback else {
+                Issue.record("Partial transcript callback was never installed")
+                return
+            }
+
+            partialCallback("streamed delta")
+            try? await Task.sleep(nanoseconds: 20_000_000)
+
+            whispr.onEscape()
+            await whispr._testWaitUntilIdle()
+
+            #expect(pasteboard.string(forType: .string) == "original clipboard")
+        }
     }
 
     @Test("Dropped-keydown log message never fires under normal re-press")

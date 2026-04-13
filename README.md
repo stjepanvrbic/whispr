@@ -75,7 +75,7 @@ Open **Preferences…** from the menu bar icon to change any of these live:
 | Field | Default | Description |
 |---|---|---|
 | **Hotkey** | Option | The modifier key you hold to record. Choices: Option, Command, Control, Shift, Fn, Right Option, Right Command. |
-| **Output** | Type keys | `Type keys` simulates each character; `Paste via clipboard` uses NSPasteboard + Cmd+V (faster for long transcripts). |
+| **Output** | Paste via clipboard | `Paste via clipboard` is the recommended default: it streams each delta via a clipboard-preserving Cmd+V path, which is faster and more reliable for long transcripts. `Type keys (legacy)` remains available as a compatibility fallback. |
 | **Idle timeout** | 3600 s (1 hour) | Seconds of inactivity before Whispr unloads the model to free RAM. `0` = never unload. |
 | **Chunk size** | 560 ms | Nemotron streaming chunk: `560` (balanced) or `1120` (best accuracy). Applies on next model load. |
 | **Custom vocabulary** | On | Whether Whispr rewrites misrecognised words using `~/.whispr/vocabulary.txt`. See below. |

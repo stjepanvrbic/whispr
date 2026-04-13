@@ -18,7 +18,7 @@ struct ConfigTests {
         let c = Config()
         #expect(c.enabled == true)
         #expect(c.hotkey == .option)
-        #expect(c.outputMode == .keypress)
+        #expect(c.outputMode == .clipboard)
         #expect(c.idleTimeout == 3600)
         #expect(c.chunkSize == .ms560)
         #expect(c.vocabularyEnabled == true)
@@ -64,7 +64,7 @@ struct ConfigTests {
     func decodeInvalidHotkey() throws {
         let c = try decode(#"{"hotkey":"bananas","output_mode":"yodel"}"#)
         #expect(c.hotkey == .option)
-        #expect(c.outputMode == .keypress)
+        #expect(c.outputMode == .clipboard)
     }
 
     @Test("Empty JSON object uses defaults")

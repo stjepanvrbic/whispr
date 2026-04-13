@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 @preconcurrency import AVFoundation
 import FluidAudio
 import Foundation
@@ -29,7 +30,6 @@ import Testing
 /// `MockAsrSession` / `MockAudioCapture` doubles.
 @Suite("Whispr short press handling")
 struct WhisprShortPressTests {
-
     private func makeWhispr(
         graceCloseDelay: TimeInterval = 0.02
     ) -> (Whispr, MockAsrSession, MockAudioCapture) {
@@ -39,6 +39,7 @@ struct WhisprShortPressTests {
             config: makeTestConfig(),
             manager: asr,
             audioCapture: capture,
+            textOutput: makeSilentTextOutput(mode: .keypress),
             graceCloseDelay: graceCloseDelay,
             persistConfig: false
         )
@@ -63,6 +64,7 @@ struct WhisprShortPressTests {
             config: makeTestConfig(),
             manager: asr,
             audioCapture: capture,
+            textOutput: makeSilentTextOutput(mode: .keypress),
             persistConfig: false
         )
         whispr._testMarkModelsLoaded()
@@ -101,7 +103,7 @@ struct WhisprShortPressTests {
 
     @Test("Buffers emitted while no session is active are discarded")
     func buffersEmittedOutsideSessionAreDiscarded() async {
-        let (whispr, asr, capture) = makeWhispr()
+        let (_, asr, capture) = makeWhispr()
 
         // No session active — emit some buffers via the always-on tap.
         capture.emit(makeTestBuffer())
@@ -169,6 +171,105 @@ struct WhisprShortPressTests {
         // finish() must still run so the drain task completes. Empty
         // transcript is fine — this is just guarding against a stall.
         #expect(asr.calls.contains("finish"))
+    }
+
+    @Test("Completed clipboard session restores the original clipboard")
+    @MainActor
+    func completedClipboardSessionRestoresClipboard() async {
+        let asr = MockAsrSession()
+        asr.setFinishReturn("streamed delta")
+        let capture = MockAudioCapture()
+        let whispr = Whispr(
+            config: Config(
+                enabled: true,
+                hotkey: .option,
+                outputMode: .clipboard,
+                idleTimeout: 0,
+                chunkSize: .ms560,
+                vocabularyEnabled: false
+            ),
+            manager: asr,
+            audioCapture: capture,
+            textOutput: makeSilentTextOutput(mode: .clipboard),
+            graceCloseDelay: 0.02,
+            persistConfig: false
+        )
+        whispr._testMarkModelsLoaded()
+        whispr.install()
+        asr.resetCallHistory()
+
+        await PasteboardTestSupport.withPreservedPasteboard { pasteboard in
+            pasteboard.clearContents()
+            pasteboard.setString("original clipboard", forType: .string)
+
+            whispr.onKeyDown()
+            capture.emit(makeTestBuffer())
+            whispr.onKeyUp()
+
+            await whispr._testWaitUntilIdle()
+
+            #expect(pasteboard.string(forType: .string) == "original clipboard")
+        }
+    }
+
+    @Test("Clipboard mode converges across many streaming partials in one session")
+    @MainActor
+    func clipboardModeConvergesAcrossManyPartials() async {
+        let asr = MockAsrSession()
+        let capture = MockAudioCapture()
+        let whispr = Whispr(
+            config: Config(
+                enabled: true,
+                hotkey: .option,
+                outputMode: .clipboard,
+                idleTimeout: 0,
+                chunkSize: .ms560,
+                vocabularyEnabled: false
+            ),
+            manager: asr,
+            audioCapture: capture,
+            textOutput: makeSilentTextOutput(mode: .clipboard),
+            graceCloseDelay: 0.02,
+            persistConfig: false
+        )
+        whispr._testMarkModelsLoaded()
+        whispr.install()
+        asr.resetCallHistory()
+
+        await PasteboardTestSupport.withPreservedPasteboard { pasteboard in
+            pasteboard.clearContents()
+            pasteboard.setString("original clipboard", forType: .string)
+
+            whispr.onKeyDown()
+            capture.emit(makeTestBuffer())
+
+            let callbackReady = Date().addingTimeInterval(1.0)
+            while asr.partialCallback == nil, Date() < callbackReady {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+
+            guard let partialCallback = asr.partialCallback else {
+                Issue.record("Partial transcript callback was never installed")
+                return
+            }
+
+            var transcript = ""
+            for index in 1...200 {
+                let next = "word\(index)"
+                transcript += transcript.isEmpty ? next : " \(next)"
+                partialCallback(transcript)
+            }
+
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            #expect(whispr.textOutput.typed == transcript)
+
+            asr.setFinishReturn(transcript)
+            whispr.onKeyUp()
+            await whispr._testWaitUntilIdle()
+
+            #expect(whispr.textOutput.typed == transcript)
+            #expect(pasteboard.string(forType: .string) == "original clipboard")
+        }
     }
 
     @Test("onKeyDown during grace period closes old session cleanly")

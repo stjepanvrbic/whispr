@@ -208,4 +208,8 @@ func makeTestConfig(
         vocabularyEnabled: vocabularyEnabled
     )
 }
+
+func makeSilentTextOutput(mode: OutputMode) -> TextOutput {
+    TextOutput(mode: mode, eventPoster: { _ in })
+}
 #endif

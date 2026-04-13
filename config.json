@@ -1,5 +1,5 @@
 {
-  "output_mode": "keypress",
+  "output_mode": "clipboard",
   "idle_timeout": 3600,
   "chunk_size": 560
 }

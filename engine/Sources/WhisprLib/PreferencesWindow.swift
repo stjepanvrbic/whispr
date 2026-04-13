@@ -78,7 +78,7 @@ private struct PreferencesView: View {
                         Text(mode.displayName).tag(mode)
                     }
                 }
-                Text("Type keys is per-character; clipboard is faster for long transcripts.")
+                Text("Paste via clipboard is recommended: it streams faster, preserves the clipboard, and is more reliable in apps like Chrome. Type keys remains as a legacy fallback.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -3,13 +3,13 @@ import Foundation
 
 /// How Whispr types the transcribed text into the active app.
 public enum OutputMode: String, Codable, Sendable, CaseIterable {
-    case keypress     // per-character unicode keydown/up events
-    case clipboard    // NSPasteboard + Cmd+V
+    case clipboard    // clipboard-preserving Cmd+V streaming
+    case keypress     // per-character unicode keydown/up events (legacy fallback)
 
     public var displayName: String {
         switch self {
-        case .keypress:  return "Type keys"
         case .clipboard: return "Paste via clipboard"
+        case .keypress:  return "Type keys (legacy)"
         }
     }
 }
@@ -35,7 +35,7 @@ public enum ChunkSize: Int, Codable, Sendable, CaseIterable {
 public struct Config: Codable, Sendable, Equatable {
     public var enabled: Bool            = true
     public var hotkey: HotkeyModifier   = .option
-    public var outputMode: OutputMode   = .keypress
+    public var outputMode: OutputMode   = .clipboard
     public var idleTimeout: Int         = 3600       // seconds; 0 = never unload
     public var chunkSize: ChunkSize     = .ms560
     public var vocabularyEnabled: Bool  = true
@@ -43,7 +43,7 @@ public struct Config: Codable, Sendable, Equatable {
     public init(
         enabled: Bool = true,
         hotkey: HotkeyModifier = .option,
-        outputMode: OutputMode = .keypress,
+        outputMode: OutputMode = .clipboard,
         idleTimeout: Int = 3600,
         chunkSize: ChunkSize = .ms560,
         vocabularyEnabled: Bool = true
@@ -71,7 +71,7 @@ public struct Config: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled           = (try? c.decodeIfPresent(Bool.self,           forKey: .enabled))           ?? true
         self.hotkey            = (try? c.decodeIfPresent(HotkeyModifier.self, forKey: .hotkey))            ?? .option
-        self.outputMode        = (try? c.decodeIfPresent(OutputMode.self,     forKey: .outputMode))        ?? .keypress
+        self.outputMode        = (try? c.decodeIfPresent(OutputMode.self,     forKey: .outputMode))        ?? .clipboard
         self.idleTimeout       = (try? c.decodeIfPresent(Int.self,            forKey: .idleTimeout))       ?? 3600
         self.chunkSize         = (try? c.decodeIfPresent(ChunkSize.self,      forKey: .chunkSize))         ?? .ms560
         self.vocabularyEnabled = (try? c.decodeIfPresent(Bool.self,           forKey: .vocabularyEnabled)) ?? true
