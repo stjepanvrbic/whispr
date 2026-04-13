@@ -306,6 +306,8 @@ public final class Whispr: @unchecked Sendable {
             return
         }
 
+        log("SESSION: hotkeyDown modifier=\(config.hotkey.rawValue)")
+
         // Kick off an on-demand model load if needed. The processing task
         // below will await it before consuming audio, and the audio stream
         // buffers chunks in the meantime so no words are lost.
@@ -381,6 +383,7 @@ public final class Whispr: @unchecked Sendable {
     func onKeyUp() {
         guard active else { return }
 
+        log("SESSION: hotkeyUp modifier=\(config.hotkey.rawValue)")
         let duration = sessionStart.map { Date().timeIntervalSince($0) } ?? 0
         log("SESSION: onKeyUp durationMs=\(Int(duration * 1000))")
 

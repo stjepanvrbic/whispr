@@ -1,4 +1,5 @@
 #if os(macOS)
+import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
 
@@ -8,7 +9,9 @@ import Foundation
 ///
 /// The watched modifier can be swapped at runtime via `setModifier(_:)`
 /// without rebuilding the CGEventTap — the callback just reads the
-/// current `watchedFlag` on every event.
+/// current watched state on every event. Only `flagsChanged` events for
+/// the watched physical modifier keycodes are allowed to change `isHeld`;
+/// unrelated modifier traffic is ignored.
 final class KeyboardMonitor: @unchecked Sendable {
     var onKeyDown: (() -> Void)?
     var onKeyUp: (() -> Void)?
@@ -21,6 +24,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     // read by keyboardCallback which also runs on the main thread (the
     // tap's run loop source is attached to CFRunLoopGetCurrent).
     fileprivate var watchedFlag: CGEventFlags = .maskAlternate
+    fileprivate var watchedKeyCodes: Set<CGKeyCode> = []
     fileprivate var watchedSideMask: UInt64 = 0
 
     init(modifier: HotkeyModifier = .option) {
@@ -36,6 +40,7 @@ final class KeyboardMonitor: @unchecked Sendable {
             onKeyUp?()
         }
         watchedFlag = mod.flag
+        watchedKeyCodes = mod.acceptedKeyCodes
         watchedSideMask = Self.deviceBit(for: mod)
     }
 
@@ -90,6 +95,35 @@ final class KeyboardMonitor: @unchecked Sendable {
             userInfo: refcon
         )
     }
+
+    /// Internal so unit tests can drive the modifier state machine without
+    /// installing a real event tap.
+    func handleKeyDown(keycode: CGKeyCode) {
+        // Escape = cancel current session, regardless of modifier state.
+        if keycode == CGKeyCode(kVK_Escape) {
+            onEscape?()
+        }
+    }
+
+    /// Internal so unit tests can feed specific modifier transitions into the
+    /// same logic the event tap uses in production.
+    func handleFlagsChanged(keycode: CGKeyCode, flags: CGEventFlags) {
+        guard watchedKeyCodes.contains(keycode) else { return }
+
+        let maskHeld = flags.contains(watchedFlag)
+        let sideOK = watchedSideMask == 0
+            || (flags.rawValue & watchedSideMask) != 0
+        let held = maskHeld && sideOK
+
+        guard held != isHeld else { return }
+        isHeld = held
+
+        if held {
+            onKeyDown?()
+        } else {
+            onKeyUp?()
+        }
+    }
 }
 
 private func keyboardCallback(
@@ -111,27 +145,17 @@ private func keyboardCallback(
     }
 
     if type == .keyDown {
-        // Escape = cancel current session, regardless of modifier state.
-        if event.getIntegerValueField(.keyboardEventKeycode) == 53 {
-            monitor.onEscape?()
-        }
+        monitor.handleKeyDown(
+            keycode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        )
         return Unmanaged.passRetained(event)
     }
 
     if type == .flagsChanged {
-        let flags = event.flags
-        let maskHeld = flags.contains(monitor.watchedFlag)
-        let sideOK = monitor.watchedSideMask == 0
-            || (flags.rawValue & monitor.watchedSideMask) != 0
-        let held = maskHeld && sideOK
-
-        if held && !monitor.isHeld {
-            monitor.isHeld = true
-            monitor.onKeyDown?()
-        } else if !held && monitor.isHeld {
-            monitor.isHeld = false
-            monitor.onKeyUp?()
-        }
+        monitor.handleFlagsChanged(
+            keycode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
+            flags: event.flags
+        )
     }
 
     return Unmanaged.passRetained(event)

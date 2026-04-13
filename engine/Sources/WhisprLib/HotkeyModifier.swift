@@ -1,4 +1,5 @@
 #if os(macOS)
+import Carbon.HIToolbox
 import CoreGraphics
 
 /// The modifier key the user holds to start a recording session.
@@ -29,6 +30,28 @@ public enum HotkeyModifier: String, Codable, Sendable, CaseIterable {
         case .control:                return .maskControl
         case .shift:                  return .maskShift
         case .fn:                     return .maskSecondaryFn
+        }
+    }
+
+    /// Physical keycodes that may legitimately change this modifier's held
+    /// state. `KeyboardMonitor` ignores `flagsChanged` events from other
+    /// modifiers so unrelated transitions cannot fake a release.
+    var acceptedKeyCodes: Set<CGKeyCode> {
+        switch self {
+        case .option:
+            return [CGKeyCode(kVK_Option), CGKeyCode(kVK_RightOption)]
+        case .command:
+            return [CGKeyCode(kVK_Command), CGKeyCode(kVK_RightCommand)]
+        case .control:
+            return [CGKeyCode(kVK_Control), CGKeyCode(kVK_RightControl)]
+        case .shift:
+            return [CGKeyCode(kVK_Shift), CGKeyCode(kVK_RightShift)]
+        case .fn:
+            return [CGKeyCode(kVK_Function)]
+        case .rightOption:
+            return [CGKeyCode(kVK_RightOption)]
+        case .rightCommand:
+            return [CGKeyCode(kVK_RightCommand)]
         }
     }
 

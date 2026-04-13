@@ -162,6 +162,8 @@ Audio flows from `AVAudioEngine` through an `AsyncStream` into `StreamingNemotro
 
 When the model is unloaded (idle timeout), a key press kicks off an on-demand reload while audio is captured in an `AsyncStream` buffer. The processing task awaits the load, then drains the buffered chunks — the user's first words are preserved.
 
+`KeyboardMonitor` only trusts `flagsChanged` events for the watched physical modifier key itself. That means unrelated modifier traffic — for example Cmd+V in clipboard mode or another modifier being pressed while you keep holding Option — cannot prematurely end the current recording.
+
 Benchmarks (Apple M2): 2.12% WER, 8.5× RTFx on LibriSpeech test-clean.
 
 ## Development
@@ -211,6 +213,14 @@ tail -f /tmp/whispr.log
 ```
 
 If the log says "Accessibility permission required", grant it in System Settings > Privacy & Security > Accessibility (look for "Whispr"). The daemon polls and will pick it up automatically within a few seconds.
+
+**Dictation stops even though I'm still holding the hotkey**
+
+```bash
+tail -f /tmp/whispr.log
+```
+
+For one uninterrupted hold, you should see exactly one `SESSION: hotkeyDown modifier=...` when you press the modifier, then one `SESSION: hotkeyUp modifier=...` and one `SESSION: finish transcript="..."` after you physically release it. If `hotkeyUp` appears early, Whispr believed the watched modifier itself changed state and ended that session.
 
 **The menu bar icon isn't showing**
 
